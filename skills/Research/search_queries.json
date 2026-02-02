@@ -1,0 +1,27 @@
+[
+  {
+    "id": 1,
+    "query": "Vietnamese product management glossary PM terminology translation tiếng Việt",
+    "purpose": "Find Vietnamese PM glossaries"
+  },
+  {
+    "id": 2,
+    "query": "product owner stakeholder backlog sprint agile MVP Vietnamese translation thuật ngữ",
+    "purpose": "Standard PM term translations"
+  },
+  {
+    "id": 3,
+    "query": "INSPIRED Marty Cagan Vietnamese translation sách quản lý sản phẩm",
+    "purpose": "Find Vietnamese PM book translations"
+  },
+  {
+    "id": 4,
+    "query": "Agile Scrum terminology Vietnamese translation tiếng Việt scrum master",
+    "purpose": "Agile/Scrum Vietnamese terminology"
+  },
+  {
+    "id": 5,
+    "query": "product management vocabulary Vietnamese industry standards thuật ngữ sản phẩm",
+    "purpose": "Academic/industry PM resources in Vietnamese"
+  }
+]

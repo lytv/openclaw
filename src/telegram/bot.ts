@@ -46,6 +46,7 @@ import {
   resolveTelegramStreamMode,
 } from "./bot/helpers.js";
 import { resolveTelegramFetch } from "./fetch.js";
+import { registerBot } from "./loopback.js";
 import { wasSentByBot } from "./sent-message-cache.js";
 
 export type TelegramBotOptions = {
@@ -367,6 +368,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     opts,
     resolveBotTopicsEnabled,
   });
+
+  // Register bot for local loopback (enables inter-bot communication on the same instance)
+  void bot.api
+    .getMe()
+    .then((me) => {
+      registerBot(account.accountId, me as any, processMessage);
+    })
+    .catch((err) => {
+      logVerbose(`[telegram] Failed to register bot for loopback: ${String(err)}`);
+    });
 
   registerTelegramNativeCommands({
     bot,

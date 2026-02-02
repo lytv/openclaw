@@ -10,6 +10,7 @@ import {
   startBrowserControlServiceFromConfig,
 } from "../browser/control-service.js";
 import { createBrowserRouteDispatcher } from "../browser/routes/dispatcher.js";
+import { startCanvasHost, type CanvasHostServer } from "../canvas-host/server.js";
 import { loadConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
@@ -42,6 +43,7 @@ import {
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { detectMime } from "../media/mime.js";
+import { defaultRuntime } from "../runtime.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import { ensureNodeHostConfig, saveNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
@@ -586,6 +588,17 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   // eslint-disable-next-line no-console
   console.log(`node host PATH: ${pathEnv}`);
 
+  const canvasHost = await startCanvasHost({
+    runtime: defaultRuntime,
+    port: 0, // random port
+    liveReload: true,
+  });
+  if (canvasHost.port > 0) {
+    console.log(
+      `canvas host listening on http://localhost:${canvasHost.port}/__openclaw__/canvas/ (root ${canvasHost.rootDir})`,
+    );
+  }
+
   const client = new GatewayClient({
     url,
     token: token?.trim() || undefined,
@@ -605,6 +618,14 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       "system.execApprovals.get",
       "system.execApprovals.set",
       ...(browserProxyEnabled ? ["browser.proxy"] : []),
+      "canvas.present",
+      "canvas.hide",
+      "canvas.navigate",
+      "canvas.eval",
+      "canvas.snapshot",
+      "canvas.a2ui.push",
+      "canvas.a2ui.pushJSONL",
+      "canvas.a2ui.reset",
     ],
     pathEnv,
     permissions: undefined,
@@ -618,7 +639,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
       if (!payload) {
         return;
       }
-      void handleInvoke(payload, client, skillBins);
+      void handleInvoke(payload, client, skillBins, canvasHost);
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)
@@ -628,6 +649,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     onClose: (code, reason) => {
       // eslint-disable-next-line no-console
       console.error(`node host gateway closed (${code}): ${reason}`);
+      void canvasHost.close();
     },
   });
 
@@ -645,8 +667,14 @@ async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: GatewayClient,
   skillBins: SkillBinsCache,
+  canvasHost: CanvasHostServer,
 ) {
   const command = String(frame.command ?? "");
+  if (command.startsWith("canvas.")) {
+    await handleCanvasInvoke(frame, client, canvasHost);
+    return;
+  }
+
   if (command === "system.execApprovals.get") {
     try {
       ensureExecApprovals();
@@ -1271,5 +1299,68 @@ async function sendNodeEvent(client: GatewayClient, event: string, payload: unkn
     });
   } catch {
     // ignore: node events are best-effort
+  }
+}
+
+async function handleCanvasInvoke(
+  frame: NodeInvokeRequestPayload,
+  client: GatewayClient,
+  canvasHost: CanvasHostServer,
+) {
+  try {
+    const command = String(frame.command ?? "");
+    let params: Record<string, unknown> = {};
+    if (frame.paramsJSON) {
+      try {
+        params = JSON.parse(frame.paramsJSON);
+      } catch {
+        // ignore
+      }
+    }
+
+    if (command === "canvas.present") {
+      const port = canvasHost.port;
+      let url = `http://localhost:${port}/__openclaw__/a2ui/`;
+      if (params.url && typeof params.url === "string") {
+        // If it's a relative path, append to localhost base
+        if (params.url.startsWith("/")) {
+          url = `http://localhost:${port}${params.url}`;
+        } else if (params.url.startsWith("http")) {
+          url = params.url;
+        } else {
+          // Treat as relative to canvas root? Or just ignore?
+          // Safest to assume it's relative to root if no scheme
+          url = `http://localhost:${port}/${params.url}`;
+        }
+      }
+
+      await sendInvokeResult(client, frame, {
+        ok: true,
+        payloadJSON: JSON.stringify({ url }),
+      });
+      return;
+    }
+
+    if (command === "canvas.a2ui.push" || command === "canvas.a2ui.pushJSONL") {
+      const jsonl = String(params.jsonl ?? "");
+      if (jsonl) {
+        canvasHost.broadcast(JSON.stringify({ type: "a2ui_push", jsonl }));
+      }
+      await sendInvokeResult(client, frame, { ok: true });
+      return;
+    }
+
+    if (command === "canvas.a2ui.reset") {
+      canvasHost.broadcast(JSON.stringify({ type: "a2ui_reset" }));
+      await sendInvokeResult(client, frame, { ok: true });
+      return;
+    }
+
+    await sendInvokeResult(client, frame, { ok: true });
+  } catch (err) {
+    await sendInvokeResult(client, frame, {
+      ok: false,
+      error: { code: "INTERNAL", message: String(err) },
+    });
   }
 }

@@ -144,7 +144,29 @@ export function injectCanvasLiveReload(html: string): string {
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(proto + "://" + location.host + ${JSON.stringify(CANVAS_WS_PATH)});
     ws.onmessage = (ev) => {
-      if (String(ev.data || "") === "reload") location.reload();
+      if (String(ev.data || "") === "reload") {
+        location.reload();
+        return;
+      }
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === "a2ui_push") {
+           const el = document.querySelector("openclaw-a2ui-host");
+           if (el && typeof el.pushJSONL === "function") {
+             el.pushJSONL(msg.jsonl);
+           } else {
+             window.dispatchEvent(new CustomEvent("openclaw:a2ui-push", { detail: { jsonl: msg.jsonl } }));
+           }
+        }
+        if (msg.type === "a2ui_reset") {
+           const el = document.querySelector("openclaw-a2ui-host");
+           if (el && typeof el.reset === "function") {
+             el.reset();
+           } else {
+             window.dispatchEvent(new CustomEvent("openclaw:a2ui-reset"));
+           }
+        }
+      } catch {}
     };
   } catch {}
 })();

@@ -24,6 +24,7 @@ import { buildTelegramThreadParams } from "./bot/helpers.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
+import { broadcastInbound } from "./loopback.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
@@ -405,6 +406,20 @@ export async function sendMessageTelegram(
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     if (result?.message_id) {
       recordSentMessage(chatId, result.message_id);
+      // Broadcast caption for loopback
+      if (caption) {
+        void api.getMe().then((me) => {
+          broadcastInbound({
+            senderAccountId: account.accountId,
+            senderMe: me as any,
+            chatId: resolvedChatId,
+            messageId: result.message_id,
+            text: caption,
+            messageThreadId: messageThreadId ?? undefined,
+            replyToMessageId: opts.replyToMessageId,
+          });
+        });
+      }
     }
     recordChannelActivity({
       channel: "telegram",
@@ -423,6 +438,22 @@ export async function sendMessageTelegram(
             }
           : undefined;
       const textRes = await sendTelegramText(followUpText, textParams);
+
+      // Broadcast for loopback
+      if (textRes?.message_id) {
+        void api.getMe().then((me) => {
+          broadcastInbound({
+            senderAccountId: account.accountId,
+            senderMe: me as any,
+            chatId: resolvedChatId,
+            messageId: textRes.message_id,
+            text: followUpText,
+            messageThreadId: messageThreadId ?? undefined,
+            replyToMessageId: opts.replyToMessageId,
+          });
+        });
+      }
+
       // Return the text message ID as the "main" message (it's the actual content).
       return {
         messageId: String(textRes?.message_id ?? mediaMessageId),
@@ -453,6 +484,22 @@ export async function sendMessageTelegram(
     accountId: account.accountId,
     direction: "outbound",
   });
+
+  // Broadcast for loopback
+  if (res?.message_id) {
+    void api.getMe().then((me) => {
+      broadcastInbound({
+        senderAccountId: account.accountId,
+        senderMe: me as any,
+        chatId: String(res.chat?.id ?? chatId),
+        messageId: res.message_id,
+        text: text,
+        messageThreadId: messageThreadId ?? undefined,
+        replyToMessageId: opts.replyToMessageId,
+      });
+    });
+  }
+
   return { messageId, chatId: String(res?.chat?.id ?? chatId) };
 }
 

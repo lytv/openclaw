@@ -36,6 +36,7 @@ export type CanvasHostServerOpts = CanvasHostOpts & {
 export type CanvasHostServer = {
   port: number;
   rootDir: string;
+  broadcast: (data: string) => void;
   close: () => Promise<void>;
 };
 
@@ -52,6 +53,7 @@ export type CanvasHostHandler = {
   basePath: string;
   handleHttpRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
   handleUpgrade: (req: IncomingMessage, socket: Duplex, head: Buffer) => boolean;
+  broadcast: (data: string) => void;
   close: () => Promise<void>;
 };
 
@@ -256,6 +258,7 @@ export async function createCanvasHostHandler(
       basePath,
       handleHttpRequest: async () => false,
       handleUpgrade: () => false,
+      broadcast: () => {},
       close: async () => {},
     };
   }
@@ -420,6 +423,16 @@ export async function createCanvasHostHandler(
     basePath,
     handleHttpRequest,
     handleUpgrade,
+    broadcast: (data: string) => {
+      if (!wss) return;
+      for (const ws of sockets) {
+        try {
+          ws.send(data);
+        } catch {
+          // ignore
+        }
+      }
+    },
     close: async () => {
       if (debounce) {
         clearTimeout(debounce);
@@ -435,7 +448,7 @@ export async function createCanvasHostHandler(
 
 export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<CanvasHostServer> {
   if (isDisabledByEnv() && opts.allowInTests !== true) {
-    return { port: 0, rootDir: "", close: async () => {} };
+    return { port: 0, rootDir: "", broadcast: () => {}, close: async () => {} };
   }
 
   const handler =
@@ -503,6 +516,7 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
   return {
     port: boundPort,
     rootDir: handler.rootDir,
+    broadcast: handler.broadcast,
     close: async () => {
       if (ownsHandler) {
         await handler.close();
