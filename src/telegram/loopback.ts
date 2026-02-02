@@ -70,6 +70,7 @@ export function broadcastInbound(params: {
           id: numericChatId,
           type: numericChatId < 0 ? "supergroup" : "private",
           title: numericChatId < 0 ? "Shared Group" : undefined,
+          is_forum: numericChatId < 0,
         },
         date: Math.floor(Date.now() / 1000),
         text: text,
