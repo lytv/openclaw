@@ -573,7 +573,7 @@ export const buildTelegramMessageContext = async ({
     RawBody: rawBody,
     CommandBody: commandBody,
     From: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
-    To: `telegram:${chatId}`,
+    To: isGroup ? buildTelegramGroupFrom(chatId, resolvedThreadId) : `telegram:${chatId}`,
     SessionKey: sessionKey,
     AccountId: route.accountId,
     ChatType: isGroup ? "group" : "direct",
@@ -626,7 +626,9 @@ export const buildTelegramMessageContext = async ({
     IsForum: isForum,
     // Originating channel for reply routing.
     OriginatingChannel: "telegram" as const,
-    OriginatingTo: `telegram:${chatId}`,
+    OriginatingTo: isGroup
+      ? buildTelegramGroupFrom(chatId, resolvedThreadId)
+      : `telegram:${chatId}`,
   });
 
   await recordInboundSession({

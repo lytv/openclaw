@@ -525,7 +525,9 @@ export const registerTelegramNativeCommands = ({
             IsForum: isForum,
             // Originating context for sub-agent announce routing
             OriginatingChannel: "telegram" as const,
-            OriginatingTo: `telegram:${chatId}`,
+            OriginatingTo: isGroup
+              ? buildTelegramGroupFrom(chatId, resolvedThreadId)
+              : `telegram:${chatId}`,
           });
 
           const disableBlockStreaming =

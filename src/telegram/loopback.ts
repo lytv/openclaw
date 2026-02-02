@@ -9,7 +9,14 @@ type ProcessMessageFn = (
 
 type BotEntry = {
   accountId: string;
-  me: { id: number; username?: string; first_name: string; last_name?: string };
+  me: {
+    id: number;
+    username?: string;
+    first_name: string;
+    last_name?: string;
+    is_bot: boolean;
+    has_topics_enabled: boolean;
+  };
   processMessage: ProcessMessageFn;
 };
 
@@ -75,7 +82,12 @@ export function broadcastInbound(params: {
         date: Math.floor(Date.now() / 1000),
         text: text,
         message_thread_id: messageThreadId,
-        reply_to_message: replyToMessageId ? { message_id: replyToMessageId } : undefined,
+        reply_to_message: replyToMessageId
+          ? {
+              message_id: replyToMessageId,
+              from: { id: bot.me.id, is_bot: true, first_name: bot.me.first_name },
+            }
+          : undefined,
       },
       getFile: async () => ({}),
     } as unknown as TelegramContext;
