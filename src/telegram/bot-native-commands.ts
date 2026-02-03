@@ -51,6 +51,7 @@ import {
   resolveTelegramForumThreadId,
 } from "./bot/helpers.js";
 import { buildInlineKeyboard } from "./send.js";
+import { handleSetupGroupCommand, sendSetupGroupResult } from "./setupgroup-command.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 
@@ -461,6 +462,41 @@ export const registerTelegramNativeCommands = ({
             });
             return;
           }
+
+          // Handle /setupgroup command directly (no agent dispatch)
+          if (command.name === "setupgroup") {
+            if (!isGroup) {
+              await withTelegramApiErrorLogging({
+                operation: "sendMessage",
+                runtime,
+                fn: () =>
+                  bot.api.sendMessage(chatId, "This command only works in groups.", {
+                    ...(threadIdForSend != null ? { message_thread_id: threadIdForSend } : {}),
+                  }),
+              });
+              return;
+            }
+            const configWritesEnabled = telegramCfg.configWrites !== false;
+            const result = await handleSetupGroupCommand({
+              bot,
+              ctx,
+              chatId,
+              chatTitle: msg.chat.title,
+              isForum,
+              senderId,
+              senderUsername,
+              messageThreadId: threadIdForSend,
+              configWritesEnabled,
+            });
+            await sendSetupGroupResult({
+              bot,
+              chatId,
+              result,
+              messageThreadId: threadIdForSend,
+            });
+            return;
+          }
+
           const route = resolveAgentRoute({
             cfg,
             channel: "telegram",

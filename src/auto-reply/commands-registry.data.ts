@@ -360,6 +360,13 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "tools",
     }),
     defineChatCommand({
+      key: "setupgroup",
+      nativeName: "setupgroup",
+      description: "Auto-configure this group in OpenClaw.",
+      textAlias: "/setupgroup",
+      category: "management",
+    }),
+    defineChatCommand({
       key: "activation",
       nativeName: "activation",
       description: "Set group activation mode.",
