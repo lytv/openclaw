@@ -487,6 +487,8 @@ export const registerTelegramNativeCommands = ({
               senderUsername,
               messageThreadId: threadIdForSend,
               configWritesEnabled,
+              cfg,
+              accountId,
             });
             await sendSetupGroupResult({
               bot,
