@@ -96,7 +96,7 @@ type BuildTelegramMessageContextParams = {
   options?: TelegramMessageContextOptions;
   bot: Bot;
   cfg: OpenClawConfig;
-  account: { accountId: string };
+  account: { accountId: string; name?: string };
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;
@@ -304,7 +304,10 @@ export const buildTelegramMessageContext = async ({
     }
   }
 
-  const botUsername = primaryCtx.me?.username?.toLowerCase();
+  const botUsername = (
+    primaryCtx.me?.username ||
+    (account.name?.startsWith("@") ? account.name.slice(1) : account.name)
+  )?.toLowerCase();
   const senderId = msg.from?.id ? String(msg.from.id) : "";
   const senderUsername = msg.from?.username ?? "";
   if (isGroup && hasGroupAllowOverride) {

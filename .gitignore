@@ -71,3 +71,7 @@ USER.md
 
 # local tooling
 .serena/
+
+# Python
+__pycache__/
+**/*.pyc
