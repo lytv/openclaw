@@ -117,7 +117,7 @@ def _search_reddit(
     return reddit_items, raw_openai, reddit_error
 
 
-def _search_x(
+def _search_xai(
     topic: str,
     config: dict,
     selected_models: dict,
@@ -126,40 +126,12 @@ def _search_x(
     depth: str,
     mock: bool,
 ) -> tuple:
-    """Search X via xAI (runs in thread).
-
-    Returns:
-        Tuple of (x_items, raw_xai, error)
-    """
+    """Search X via xAI API (runs in thread)."""
     raw_xai = None
     x_error = None
-
     if mock:
         raw_xai = load_fixture("xai_sample.json")
     else:
-        # Determine whether to use xAI API or bird CLI
-        use_bird = config.get("USE_BIRD", False)
-        has_xai_key = bool(config.get("XAI_API_KEY"))
-        items = []
-
-        # Use bird if explicitly requested, or if we have no API key
-        if use_bird or (not has_xai_key and env.check_bird_available()):
-            try:
-                items = bird_x.search_x(
-                    topic,
-                    from_date,
-                    to_date,
-                    depth=depth,
-                )
-                raw_xai = {"source": "bird", "items_count": len(items)}
-            except Exception as e:
-                raw_xai = {"error": str(e)}
-                x_error = f"Bird CLI error: {e}"
-            
-            # Bird returns already parsed items, so we return immediately
-            return items, raw_xai, x_error
-            
-        # Otherwise use xAI API
         try:
             raw_xai = xai_x.search_x(
                 config["XAI_API_KEY"],
@@ -175,11 +147,38 @@ def _search_x(
         except Exception as e:
             raw_xai = {"error": str(e)}
             x_error = f"{type(e).__name__}: {e}"
+    items = xai_x.parse_x_response(raw_xai or {})
+    return items, raw_xai, x_error
 
-    # Parse response
-    x_items = xai_x.parse_x_response(raw_xai or {})
 
-    return x_items, raw_xai, x_error
+def _search_bird(
+    topic: str,
+    from_date: str,
+    to_date: str,
+    depth: str,
+    mock: bool,
+) -> tuple:
+    """Search X via bird CLI (runs in thread)."""
+    items = []
+    x_error = None
+    if mock:
+        # Load a separate fixture for bird if available, otherwise use xai sample
+        mock_data = load_fixture("bird_sample.json")
+        if not mock_data:
+            mock_data = load_fixture("xai_sample.json").get("items", [])
+        items = bird_x.parse_bird_response(mock_data)
+    else:
+        try:
+            items = bird_x.search_x(
+                topic,
+                from_date,
+                to_date,
+                depth=depth,
+            )
+        except Exception as e:
+            x_error = f"Bird CLI error: {e}"
+    raw_bird = {"source": "bird", "items_count": len(items)}
+    return items, raw_bird, x_error
 
 
 def run_research(
@@ -197,9 +196,6 @@ def run_research(
 
     Returns:
         Tuple of (reddit_items, x_items, web_needed, raw_openai, raw_xai, raw_reddit_enriched, reddit_error, x_error)
-
-    Note: web_needed is True when WebSearch should be performed by Claude.
-    The script outputs a marker and Claude handles WebSearch in its session.
     """
     reddit_items = []
     x_items = []
@@ -209,10 +205,9 @@ def run_research(
     reddit_error = None
     x_error = None
 
-    # Check if WebSearch is needed (always needed in web-only mode)
+    # Check if WebSearch is needed
     web_needed = sources in ("all", "web", "reddit-web", "x-web")
 
-    # Web-only mode: no API calls needed, Claude handles everything
     if sources == "web":
         if progress:
             progress.start_web_only()
@@ -223,13 +218,13 @@ def run_research(
     run_reddit = sources in ("both", "reddit", "all", "reddit-web")
     run_x = sources in ("both", "x", "all", "x-web")
 
-    # Run Reddit and X searches in parallel
+    # Run searches in parallel
     reddit_future = None
-    x_future = None
+    xai_future = None
+    bird_future = None
 
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        # Submit both searches
-        if run_reddit:
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        if run_reddit and (config.get("OPENAI_API_KEY") or mock):
             if progress:
                 progress.start_reddit()
             reddit_future = executor.submit(
@@ -238,35 +233,67 @@ def run_research(
             )
 
         if run_x:
-            if progress:
-                progress.start_x()
-            x_future = executor.submit(
-                _search_x, topic, config, selected_models,
-                from_date, to_date, depth, mock
-            )
+            # Try both if possible
+            if config.get("XAI_API_KEY") or mock:
+                if progress:
+                    # Only show "X" start once even if multiple searches
+                    progress.start_x()
+                xai_future = executor.submit(
+                    _search_xai, topic, config, selected_models,
+                    from_date, to_date, depth, mock
+                )
+            
+            if env.check_bird_available() or mock:
+                if progress and not xai_future:
+                    progress.start_x()
+                bird_future = executor.submit(
+                    _search_bird, topic, from_date, to_date, depth, mock
+                )
 
-        # Collect results
+        # Collect Reddit
         if reddit_future:
             try:
                 reddit_items, raw_openai, reddit_error = reddit_future.result()
-                if reddit_error and progress:
-                    progress.show_error(f"Reddit error: {reddit_error}")
             except Exception as e:
-                reddit_error = f"{type(e).__name__}: {e}"
-                if progress:
-                    progress.show_error(f"Reddit error: {e}")
+                reddit_error = f"Reddit search failed: {e}"
             if progress:
                 progress.end_reddit(len(reddit_items))
 
-        if x_future:
+        # Collect X results
+        combined_x = []
+        x_errors = []
+        
+        if xai_future:
             try:
-                x_items, raw_xai, x_error = x_future.result()
-                if x_error and progress:
-                    progress.show_error(f"X error: {x_error}")
+                items, raw, err = xai_future.result()
+                combined_x.extend(items)
+                raw_xai = raw
+                if err: x_errors.append(err)
             except Exception as e:
-                x_error = f"{type(e).__name__}: {e}"
-                if progress:
-                    progress.show_error(f"X error: {e}")
+                x_errors.append(f"XAI search failed: {e}")
+        
+        if bird_future:
+            try:
+                items, raw, err = bird_future.result()
+                combined_x.extend(items)
+                # Keep XAI raw if we have it, otherwise use bird's minimal raw
+                if not raw_xai: raw_xai = raw
+                if err: x_errors.append(err)
+            except Exception as e:
+                x_errors.append(f"Bird search failed: {e}")
+
+        if run_x:
+            # Deduplicate by URL
+            unique_x = []
+            seen_urls = set()
+            for item in combined_x:
+                url = item.get("url")
+                if url not in seen_urls:
+                    unique_x.append(item)
+                    seen_urls.add(url)
+            x_items = unique_x
+            if x_errors:
+                x_error = "; ".join(x_errors)
             if progress:
                 progress.end_x(len(x_items))
 
