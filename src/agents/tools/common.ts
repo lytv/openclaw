@@ -46,7 +46,23 @@ export function readStringParam(
   options: StringParamOptions = {},
 ) {
   const { required = false, trim = true, label = key, allowEmpty = false } = options;
-  const raw = params[key];
+  let raw = params[key];
+
+  if (Array.isArray(raw)) {
+    const textBlocks = raw.filter(
+      (block): block is { type: "text"; text: string } =>
+        block &&
+        typeof block === "object" &&
+        "type" in block &&
+        block.type === "text" &&
+        "text" in block &&
+        typeof block.text === "string",
+    );
+    if (textBlocks.length > 0) {
+      raw = textBlocks.map((block) => block.text).join("\n");
+    }
+  }
+
   if (typeof raw !== "string") {
     if (required) {
       throw new Error(`${label} required`);
