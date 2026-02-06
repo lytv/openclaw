@@ -1,6 +1,8 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { callGateway } from "../../gateway/call.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
@@ -68,52 +70,52 @@ export type RunMessageActionParams = {
 
 export type MessageActionRunResult =
   | {
-      kind: "send";
-      channel: ChannelId;
-      action: "send";
-      to: string;
-      handledBy: "plugin" | "core";
-      payload: unknown;
-      toolResult?: AgentToolResult<unknown>;
-      sendResult?: MessageSendResult;
-      dryRun: boolean;
-    }
+    kind: "send";
+    channel: ChannelId;
+    action: "send";
+    to: string;
+    handledBy: "plugin" | "core";
+    payload: unknown;
+    toolResult?: AgentToolResult<unknown>;
+    sendResult?: MessageSendResult;
+    dryRun: boolean;
+  }
   | {
-      kind: "broadcast";
-      channel: ChannelId;
-      action: "broadcast";
-      handledBy: "core" | "dry-run";
-      payload: {
-        results: Array<{
-          channel: ChannelId;
-          to: string;
-          ok: boolean;
-          error?: string;
-          result?: MessageSendResult;
-        }>;
-      };
-      dryRun: boolean;
-    }
-  | {
-      kind: "poll";
-      channel: ChannelId;
-      action: "poll";
-      to: string;
-      handledBy: "plugin" | "core";
-      payload: unknown;
-      toolResult?: AgentToolResult<unknown>;
-      pollResult?: MessagePollResult;
-      dryRun: boolean;
-    }
-  | {
-      kind: "action";
-      channel: ChannelId;
-      action: Exclude<ChannelMessageActionName, "send" | "poll">;
-      handledBy: "plugin" | "dry-run";
-      payload: unknown;
-      toolResult?: AgentToolResult<unknown>;
-      dryRun: boolean;
+    kind: "broadcast";
+    channel: ChannelId;
+    action: "broadcast";
+    handledBy: "core" | "dry-run";
+    payload: {
+      results: Array<{
+        channel: ChannelId;
+        to: string;
+        ok: boolean;
+        error?: string;
+        result?: MessageSendResult;
+      }>;
     };
+    dryRun: boolean;
+  }
+  | {
+    kind: "poll";
+    channel: ChannelId;
+    action: "poll";
+    to: string;
+    handledBy: "plugin" | "core";
+    payload: unknown;
+    toolResult?: AgentToolResult<unknown>;
+    pollResult?: MessagePollResult;
+    dryRun: boolean;
+  }
+  | {
+    kind: "action";
+    channel: ChannelId;
+    action: Exclude<ChannelMessageActionName, "send" | "poll">;
+    handledBy: "plugin" | "dry-run";
+    payload: unknown;
+    toolResult?: AgentToolResult<unknown>;
+    dryRun: boolean;
+  };
 
 export function getToolResult(
   result: MessageActionRunResult,
@@ -127,12 +129,12 @@ function extractToolPayload(result: AgentToolResult<unknown>): unknown {
   }
   const textBlock = Array.isArray(result.content)
     ? result.content.find(
-        (block) =>
-          block &&
-          typeof block === "object" &&
-          (block as { type?: unknown }).type === "text" &&
-          typeof (block as { text?: unknown }).text === "string",
-      )
+      (block) =>
+        block &&
+        typeof block === "object" &&
+        (block as { type?: unknown }).type === "text" &&
+        typeof (block as { text?: unknown }).text === "string",
+    )
     : undefined;
   const text = (textBlock as { text?: string } | undefined)?.text;
   if (text) {
@@ -735,15 +737,15 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const outboundRoute =
     agentId && !dryRun
       ? await resolveOutboundSessionRoute({
-          cfg,
-          channel,
-          agentId,
-          accountId,
-          target: to,
-          resolvedTarget,
-          replyToId,
-          threadId: threadId ?? slackAutoThreadId,
-        })
+        cfg,
+        channel,
+        agentId,
+        accountId,
+        target: to,
+        resolvedTarget,
+        replyToId,
+        threadId: threadId ?? slackAutoThreadId,
+      })
       : null;
   if (outboundRoute && agentId && !dryRun) {
     await ensureOutboundSessionEntry({
@@ -770,11 +772,11 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       mirror:
         outboundRoute && !dryRun
           ? {
-              sessionKey: outboundRoute.sessionKey,
-              agentId,
-              text: message,
-              mediaUrls: mirrorMediaUrls,
-            }
+            sessionKey: outboundRoute.sessionKey,
+            agentId,
+            text: message,
+            mediaUrls: mirrorMediaUrls,
+          }
           : undefined,
       abortSignal,
     },
@@ -785,6 +787,20 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
     gifPlayback,
     bestEffort: bestEffort ?? undefined,
   });
+
+  if (!dryRun && message && agentId) {
+    try {
+      await maybeTriggerImplicitHandoff({
+        cfg,
+        channel,
+        message,
+        currentAgentId: agentId,
+        targetGroupId: to,
+      });
+    } catch {
+      // ignore
+    }
+  }
 
   return {
     kind: "send",
@@ -1042,3 +1058,119 @@ export async function runMessageAction(
     abortSignal: input.abortSignal,
   });
 }
+
+async function maybeTriggerImplicitHandoff(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  message: string;
+  currentAgentId: string;
+  targetGroupId: string;
+}): Promise<void> {
+  const log = async (msg: string) => {
+    try {
+      await fs.appendFile("/tmp/handoff-debug.log", `[${new Date().toISOString()}] ${msg}\n`);
+    } catch { }
+  };
+  await log(`Checking message: ${params.message.slice(0, 50)}`);
+
+  const match = params.message.match(/✅ \[.*@(\w+) YOUR TURN\]/);
+  if (!match) {
+    await log("No regex match.");
+    return;
+  }
+  const targetBotName = match[1];
+  await log(`Target bot name extracted: ${targetBotName}`);
+
+  const channelCfg = params.cfg.channels?.[params.channel] as any;
+  const accounts = channelCfg?.accounts ?? {};
+
+  // Simpler lookup: iterating keys to find account ID
+  let targetAccountId: string | undefined;
+
+  for (const [key, acc] of Object.entries(accounts)) {
+    if ((acc as any).name === `@${targetBotName}` || (acc as any).name === targetBotName) {
+      targetAccountId = key;
+      break;
+    }
+  }
+
+  if (!targetAccountId) {
+    await log(`Target account ID not found for name: ${targetBotName}`);
+    return;
+  }
+  await log(`Target account ID found: ${targetAccountId}`);
+
+
+
+  if (!targetAccountId) return;
+
+  const targetAgentBinding = params.cfg.bindings?.find(
+    (b) => b.match.channel === params.channel && b.match.accountId === targetAccountId
+  );
+
+  if (!targetAgentBinding) {
+    await log(`No binding found for accountId: ${targetAccountId}`);
+    return;
+  }
+
+  const targetAgentId = targetAgentBinding.agentId;
+  await log(`Target agent ID: ${targetAgentId}`);
+
+  // Prevent self-trigger loops if misconfigured
+  if (targetAgentId === params.currentAgentId) {
+    await log("Self-trigger detected. Aborting.");
+    return;
+  }
+
+  // Check Allow Policy
+  const a2aEnabled = params.cfg.tools?.agentToAgent?.enabled === true;
+  if (!a2aEnabled) {
+    await log("AgentToAgent disabled.");
+    return;
+  }
+
+  const allowed = params.cfg.tools?.agentToAgent?.allow?.includes(targetAgentId);
+  const currentAllowed = params.cfg.tools?.agentToAgent?.allow?.includes(params.currentAgentId);
+
+  if (!allowed || !currentAllowed) {
+    await log("Policy denied.");
+    return;
+  }
+
+  // Resolve Session Route for Target
+  const route = await resolveOutboundSessionRoute({
+    cfg: params.cfg,
+    channel: params.channel,
+    agentId: targetAgentId,
+    accountId: targetAccountId,
+    target: params.targetGroupId,
+  });
+
+  if (!route) {
+    await log(`Failed to resolve session route for targetGroupId: ${params.targetGroupId}`);
+    return;
+  }
+  await log(`Route resolved. SessionKey: ${route.sessionKey}`);
+
+  // Trigger Agent
+  try {
+    await log("Calling Gateway...");
+    await callGateway({
+      method: "agent",
+      params: {
+        message: params.message,
+        sessionKey: route.sessionKey,
+        idempotencyKey: crypto.randomUUID(),
+        deliver: true,
+        channel: "internal_handoff",
+      },
+      timeoutMs: 5000,
+    });
+    await log("Gateway call successful.");
+  } catch (err) {
+    await log(`Gateway call failed: ${err}`);
+    console.warn("Implicit handoff trigger failed", err);
+  }
+}
+
+import crypto from "node:crypto";

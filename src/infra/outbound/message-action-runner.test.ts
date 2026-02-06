@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { callGateway } from "../../gateway/call.js";
 import { slackPlugin } from "../../../extensions/slack/src/channel.js";
 import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
@@ -17,6 +18,10 @@ vi.mock("../../web/media.js", async () => {
     loadWebMedia: vi.fn(actual.loadWebMedia),
   };
 });
+
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: vi.fn(),
+}));
 
 const slackConfig = {
   channels: {
@@ -507,5 +512,77 @@ describe("runMessageAction accountId defaults", () => {
     };
     expect(ctx.accountId).toBe("ops");
     expect(ctx.params.accountId).toBe("ops");
+  });
+});
+
+
+describe("Implicit Handoff Trigger", () => {
+  const mockConfig: OpenClawConfig = {
+    channels: {
+      telegram: {
+        accounts: {
+          uvbot: { name: "@ungvien_bot" },
+          pvbot: { name: "@phongvanuv_bot" },
+        },
+      },
+    },
+    bindings: [
+      { agentId: "uvbot", match: { channel: "telegram", accountId: "uvbot" } },
+      { agentId: "pvbot", match: { channel: "telegram", accountId: "pvbot" } },
+    ],
+    tools: {
+      agentToAgent: {
+        enabled: true,
+        allow: ["uvbot", "pvbot"],
+      },
+    },
+  } as unknown as OpenClawConfig;
+
+  beforeEach(() => {
+    vi.mocked(callGateway).mockClear();
+    vi.mocked(callGateway).mockResolvedValue({ status: "ok" });
+  });
+
+  it("triggers handoff when marker is present", async () => {
+    await runMessageAction({
+      cfg: mockConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: "-100123",
+        message: "Question text ✅ [QUESTION COMPLETE - @ungvien_bot YOUR TURN]",
+      },
+      agentId: "pvbot",
+      dryRun: false,
+    });
+
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({
+      method: "agent",
+      params: expect.objectContaining({
+        deliver: true,
+        sessionKey: expect.stringContaining("uvbot"),
+      }),
+    }));
+  });
+
+  it("does not trigger when disabled by policy", async () => {
+    const disabledConfig = {
+      ...mockConfig,
+      tools: { agentToAgent: { enabled: false } },
+    } as unknown as OpenClawConfig;
+
+    await runMessageAction({
+      cfg: disabledConfig,
+      action: "send",
+      params: {
+        channel: "telegram",
+        target: "-100123",
+        message: "Question text ✅ [QUESTION COMPLETE - @ungvien_bot YOUR TURN]",
+      },
+      agentId: "pvbot",
+      dryRun: false,
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
   });
 });

@@ -48,6 +48,20 @@ export function readStringParam(
   const { required = false, trim = true, label = key, allowEmpty = false } = options;
   let raw = params[key];
 
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+          raw = parsed;
+        }
+      } catch {
+        // failed to parse, keep as string
+      }
+    }
+  }
+
   if (Array.isArray(raw)) {
     const textBlocks = raw.filter(
       (block): block is { type: "text"; text: string } =>

@@ -4,6 +4,7 @@ import {
   readNumberParam,
   readReactionParams,
   readStringOrNumberParam,
+  readStringParam,
 } from "./common.js";
 
 type TestActions = {
@@ -87,5 +88,31 @@ describe("readReactionParams", () => {
     });
     expect(result.remove).toBe(true);
     expect(result.emoji).toBe("✅");
+  });
+});
+
+describe("readStringParam", () => {
+  it("returns string as is", () => {
+    const params = { message: "hello" };
+    expect(readStringParam(params, "message")).toBe("hello");
+  });
+
+  it("extracts text from content array", () => {
+    const params = {
+      message: [{ type: "text", text: "hello world" }],
+    };
+    expect(readStringParam(params, "message")).toBe("hello world");
+  });
+
+  it("extracts text from stringified content array", () => {
+    const params = {
+      message: JSON.stringify([{ type: "text", text: "hello encoded" }]),
+    };
+    expect(readStringParam(params, "message")).toBe("hello encoded");
+  });
+
+  it("returns undefined for non-string, non-array input", () => {
+    const params = { message: 123 };
+    expect(readStringParam(params, "message")).toBeUndefined();
   });
 });
